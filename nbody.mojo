@@ -1,6 +1,6 @@
 from math import sqrt
 from random import rand, random_float64
-from algorithm import vectorize
+from algorithm import tile
 from memory import memcpy, memset_zero
 from testing import assert_equal, assert_almost_equal
 
@@ -150,28 +150,34 @@ fn accelerate[n: Int](inout particles: Particles[n]):
     for i0 in range(n - 1):
 
         @parameter
-        fn other_particles[_nelts: Int](i_tail: Int):
-            let i1 = i0 + i_tail + 1
+        fn other_particles[_nelts: Int](i1: Int):
             let delta_x = position[0].load(i0) - position[0].simd_load[_nelts](i1)
             let delta_y = position[1].load(i0) - position[1].simd_load[_nelts](i1)
             let delta_z = position[2].load(i0) - position[2].simd_load[_nelts](i1)
             let distance_cube = norm_cube(delta_x, delta_y, delta_z)
             let delta = StaticTuple[3, SIMD[DType.float64, _nelts]](
-                delta_x, delta_y, delta_z
+                delta_x / distance_cube,
+                delta_y / distance_cube,
+                delta_z / distance_cube,
             )
 
             @unroll
             for axis in range(3):
-                let new_acc_p0 = acceleration[axis].load(i0) - (
-                    mass.simd_load[_nelts](i1) / distance_cube * delta[axis]
-                ).reduce_add()
-                acceleration[axis].store(i0, new_acc_p0)
-                let new_acc_p1 = acceleration[axis].simd_load[_nelts](i1) + mass.load(
-                    i0
-                ) / distance_cube * delta[axis]
-                acceleration[axis].simd_store[_nelts](i1, new_acc_p1)
+                acceleration[axis].store(
+                    i0,
+                    acceleration[axis].load(i0)
+                    - (mass.simd_load[_nelts](i1) * delta[axis]).reduce_add(),
+                )
+                acceleration[axis].simd_store[_nelts](
+                    i1,
+                    acceleration[axis].simd_load[_nelts](i1)
+                    + mass.load(i0) * delta[axis],
+                )
 
-        vectorize[nelts, other_particles](n - i0 - 1)
+        tile[
+            other_particles,
+            VariadicList(nelts, nelts // 2, nelts // 4, 1),
+        ](i0 + 1, n)
 
 
 fn bench[func: fn (inout VecParticles) -> None]() -> Float64:
